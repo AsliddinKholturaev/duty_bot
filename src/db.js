@@ -1,8 +1,14 @@
 const dayjs = require("dayjs");
+const fs = require("fs");
 const { LowSync } = require("lowdb");
 const { JSONFileSync } = require("lowdb/node");
+const path = require("path");
 
-const adapter = new JSONFileSync("db.json");
+const dbFilePath = path.resolve(process.env.DB_FILE_PATH || "db.json");
+// Ensure custom DB path directories exist before lowdb touches the file.
+fs.mkdirSync(path.dirname(dbFilePath), { recursive: true });
+
+const adapter = new JSONFileSync(dbFilePath);
 const defaultData = {
   chatId: null,
   admins: [],
