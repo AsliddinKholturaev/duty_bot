@@ -9,7 +9,7 @@ function buildTasksList() {
 }
 
 function getDutyMessage(title, current, next) {
-  return `${title}\n\n👤 Navbatchi: @${current.username}\n⏭ Keyingi navbatchi: @${next.username}}`;
+  return `${title}\n\n👤 Navbatchi: @${current.username}\n⏭ Keyingi navbatchi: @${next.username}`;
 }
 
 function getDutyReminderMessage(current) {
