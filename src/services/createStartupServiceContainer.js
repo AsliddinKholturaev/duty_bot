@@ -396,7 +396,7 @@ function createUserAdminService({
         await userRepository.findByTelegramUserId(telegramUserId);
 
       if (existing && existing.isActive) {
-        return `ℹ️ @${formatUserLabel(existing)} allaqachon foydalanuvchilar ro'yxatida bor.`;
+        return `ℹ️ ${formatUserMention(existing)} allaqachon foydalanuvchilar ro'yxatida bor.`;
       }
 
       // Create new or reactivate soft-deleted user
@@ -406,10 +406,10 @@ function createUserAdminService({
       });
 
       if (existing && !existing.isActive) {
-        return `✅ @${formatUserLabel(savedUser)} ro'yxatga qaytarildi.`;
+        return `✅ ${formatUserMention(savedUser)} ro'yxatga qaytarildi.`;
       }
 
-      return `✅ @${formatUserLabel(savedUser)} foydalanuvchilar ro'yxatiga qo'shildi.`;
+      return `✅ ${formatUserMention(savedUser)} foydalanuvchilar ro'yxatiga qo'shildi.`;
     },
     removeUser: async ({ telegramUserId } = {}) => {
       await ensureBootstrapped();
@@ -427,7 +427,7 @@ function createUserAdminService({
       await userRepository.updateById(user.id, { isActive: false });
       await adminRepository.removeByUserId(user.id);
 
-      return `🗑 @${formatUserLabel(user)} faol ro'yxatdan chiqarildi.`;
+      return `🗑 ${formatUserMention(user)} faol ro'yxatdan chiqarildi.`;
     },
     listAdmins: async () => {
       await ensureBootstrapped();
@@ -687,7 +687,7 @@ function createKitchenCommandFacade({
 
       return [
         "🍽 Oshxona navbatchiligi:",
-        `Joriy: @${formatUserLabel(result.assignee)}`,
+        `Joriy: ${formatUserMention(result.assignee)}`,
         `Keyingi almashtirish: ${formatDateTime(result.nextRotationAt)}`,
       ].join("\n");
     },
@@ -702,7 +702,7 @@ function createKitchenCommandFacade({
       return [
         "📋 Oshxona navbati:",
         ...queue.map(
-          (item) => `${item.position}. @${formatUserLabel(item.user)}`,
+          (item) => `${item.position}. ${formatUserMention(item.user)}`,
         ),
       ].join("\n");
     },
@@ -735,7 +735,7 @@ function createKitchenCommandFacade({
         isActive: true,
       });
 
-      return `✅ @${formatUserLabel(user)} oshxona navbatiga qo'shildi.`;
+      return `✅ ${formatUserMention(user)} oshxona navbatiga qo'shildi.`;
     },
     removeQueueMember: async ({ userId } = {}) => {
       await ensureBootstrapped();
@@ -761,7 +761,7 @@ function createKitchenCommandFacade({
       }
 
       const lines = [
-        `✅ Yangi oshxona navbatchisi: @${formatUserLabel(result.currentAssignee)}`,
+        `✅ Yangi oshxona navbatchisi: ${formatUserMention(result.currentAssignee)}`,
       ];
 
       const tasks = await loadTasksForCode(
@@ -849,7 +849,7 @@ function createBathroomCommandFacade({
 
       return [
         "🚿 Hammom navbatchiligi:",
-        `Joriy juftlik: ${assignees.map((user) => `@${formatUserLabel(user)}`).join(" va ")}`,
+        `Joriy juftlik: ${assignees.map((user) => `${formatUserMention(user)}`).join(" va ")}`,
         `Keyingi almashtirish: ${formatDateTime(result.nextRotationAt)}`,
       ].join("\n");
     },
@@ -865,7 +865,7 @@ function createBathroomCommandFacade({
         "📋 Hammom juftliklari:",
         ...result.groups.map((group) => {
           const members = group.members
-            .map((member) => `@${formatUserLabel(member.user)}`)
+            .map((member) => `${formatUserMention(member.user)}`)
             .join(" + ");
           return `${group.position}. ${members || "(bo'sh)"}`;
         }),
@@ -922,7 +922,7 @@ function createBathroomCommandFacade({
         });
       }
 
-      return `✅ @${formatUserLabel(user)} hammom navbati ro'yxatiga qo'shildi.`;
+      return `✅ ${formatUserMention(user)} hammom navbati ro'yxatiga qo'shildi.`;
     },
     removePoolUser: async ({ userId } = {}) => {
       await ensureBootstrapped();
@@ -969,7 +969,7 @@ function createBathroomCommandFacade({
         userId2,
       });
       const members = result.members.map(
-        (member) => `@${formatUserLabel(member.user)}`,
+        (member) => `${formatUserMention(member.user)}`,
       );
       return `✅ Juftlik saqlandi: ${members.join(" va ")}`;
     },
@@ -984,7 +984,7 @@ function createBathroomCommandFacade({
       }
 
       const names = (result.currentAssignment?.assignees || [])
-        .map((user) => `@${formatUserLabel(user)}`)
+        .map((user) => `${formatUserMention(user)}`)
         .join(" va ");
 
       const lines = [`✅ Yangi hammom juftligi: ${names || "(noma'lum)"}`];
@@ -1024,7 +1024,7 @@ function createRoomCommandFacade({
         "🏠 Xonalar:",
         ...data.rooms.map((room) => {
           const owners = room.owners
-            .map((owner) => `@${formatUserLabel(owner.user)}`)
+            .map((owner) => `${formatUserMention(owner.user)}`)
             .join(" ");
           return `- ${room.code}: ${owners || "egalar biriktirilmagan"}`;
         }),
@@ -1206,7 +1206,7 @@ function createAccountabilityService({
         `⚠️ ${targetMonth} badDuty hisoboti:`,
         ...offenders.map(
           (item, index) =>
-            `${index + 1}. @${formatUserLabel(item.user)} bu oy ${item.badDutyCount} marta vazifani vaqtida topshirmagan.`,
+            `${index + 1}. ${formatUserMention(item.user)} bu oy ${item.badDutyCount} marta vazifani vaqtida topshirmagan.`,
         ),
       ].join("\n");
     },
@@ -1247,7 +1247,7 @@ function createOnDutyService({
       lines.push("🍽 Oshxona va chiqindi:");
 
       if (kitchenResult?.assignee) {
-        lines.push(`  Navbatchi: @${formatUserLabel(kitchenResult.assignee)}`);
+        lines.push(`  Navbatchi: ${formatUserMention(kitchenResult.assignee)}`);
         lines.push(
           `  Almashtirish: ${formatDateTime(kitchenResult.nextRotationAt)}`,
         );
@@ -1270,7 +1270,7 @@ function createOnDutyService({
 
       if (assignees.length) {
         const names = assignees
-          .map((user) => `@${formatUserLabel(user)}`)
+          .map((user) => `${formatUserMention(user)}`)
           .join(" va ");
         lines.push(`  Juftlik: ${names}`);
         lines.push(
@@ -1770,7 +1770,7 @@ function formatAdminList(admins) {
     "📋 Adminlar:",
     ...admins.map((admin, index) => {
       const label = admin.user
-        ? `@${formatUserLabel(admin.user)}`
+        ? `${formatUserMention(admin.user)}`
         : `user:${admin.userId}`;
       return `${index + 1}. ${label} (ID: ${admin.userId})`;
     }),
@@ -1786,9 +1786,19 @@ function formatUserList(users) {
     "📋 Foydalanuvchilar:",
     ...users.map(
       (user, index) =>
-        `${index + 1}. @${formatUserLabel(user)} (ID: ${user.id})`,
+        `${index + 1}. ${formatUserMention(user)} (ID: ${user.id})`,
     ),
   ].join("\n");
+}
+
+function formatUserMention(user) {
+  const username = normalizeTelegramUsername(user?.username);
+
+  if (username) {
+    return `@${username}`;
+  }
+
+  return formatUserLabel(user);
 }
 
 function formatUserLabel(user) {
@@ -1796,14 +1806,45 @@ function formatUserLabel(user) {
     return "noma'lum";
   }
 
-  return (
-    user.username ||
-    user.firstName ||
-    user.first_name ||
-    user.lastName ||
-    user.last_name ||
-    user.id
-  );
+  const fullName = [
+    user.firstName || user.first_name,
+    user.lastName || user.last_name,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  if (fullName) {
+    return fullName;
+  }
+
+  const rawUsername =
+    typeof user.username === "string" ? user.username.trim() : "";
+
+  if (rawUsername) {
+    return rawUsername;
+  }
+
+  const telegramUserId = resolveTelegramUserId(user);
+  if (telegramUserId != null) {
+    return `user:${telegramUserId}`;
+  }
+
+  return "noma'lum";
+}
+
+function normalizeTelegramUsername(username) {
+  if (typeof username !== "string") {
+    return "";
+  }
+
+  const value = username.trim();
+
+  if (!/^[A-Za-z0-9_]{5,32}$/.test(value)) {
+    return "";
+  }
+
+  return value;
 }
 
 function rotateLegacyUsers(users, currentIndex) {
