@@ -13,7 +13,8 @@ function isTelegramUsername(value) {
 }
 
 function formatLegacyMention(user) {
-  const username = typeof user?.username === "string" ? user.username.trim() : "";
+  const username =
+    typeof user?.username === "string" ? user.username.trim() : "";
 
   if (isTelegramUsername(username)) {
     return `@${username}`;

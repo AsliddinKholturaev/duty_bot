@@ -268,8 +268,10 @@ function createStartupServiceContainer({ bot, db }) {
     userRepository: repositories.userRepository,
     adminRepository: repositories.adminRepository,
     dutyDefinitionRepository: repositories.dutyDefinitionRepository,
+    dutyTaskRepository: repositories.dutyTaskRepository,
     genericDutyService,
     dutyPollService,
+    notifier,
   });
 
   const authService = {
@@ -1299,9 +1301,75 @@ function createSystemService({
   userRepository,
   adminRepository,
   dutyDefinitionRepository,
+  dutyTaskRepository,
   genericDutyService,
   dutyPollService,
+  notifier,
 }) {
+  async function resolveTargetChatId(requestedChatId) {
+    const requestedId = Number(requestedChatId);
+    const storedChat = await chatSettingsRepository.findFirst();
+    const storedChatId =
+      storedChat?.telegramChatId != null
+        ? Number(storedChat.telegramChatId)
+        : null;
+
+    if (Number.isFinite(requestedId) && requestedId < 0) {
+      return requestedId;
+    }
+
+    if (Number.isFinite(storedChatId)) {
+      return storedChatId;
+    }
+
+    return null;
+  }
+
+  async function buildDutyNotificationMessage(dutyCode) {
+    const dutyDefinition = await dutyDefinitionRepository.findByCode(dutyCode);
+
+    if (!dutyDefinition) {
+      throw new Error(`Duty topilmadi: ${dutyCode}`);
+    }
+
+    const snapshot = await genericDutyService.getDutySnapshot(dutyCode);
+    const tasks = await loadTasksForCode(
+      dutyDefinitionRepository,
+      dutyTaskRepository,
+      dutyCode,
+    );
+
+    const assignees = snapshot.currentAssignment?.assignees || [];
+    const lines = [`📣 ${dutyDefinition.name || dutyDefinition.code}`];
+
+    if (!assignees.length) {
+      lines.push("");
+      lines.push("Hozircha navbatchi yo'q.");
+    } else if (assignees.length === 1) {
+      lines.push("");
+      lines.push(`Navbatchi: ${formatUserMention(assignees[0])}`);
+    } else {
+      lines.push("");
+      lines.push(
+        `Joriy juftlik: ${assignees.map((user) => formatUserMention(user)).join(" va ")}`,
+      );
+    }
+
+    if (snapshot.nextRotationAt) {
+      lines.push(`Almashtirish: ${formatDateTime(snapshot.nextRotationAt)}`);
+    }
+
+    if (tasks.length) {
+      lines.push("");
+      lines.push("Vazifalar:");
+      tasks.forEach((task, index) => {
+        lines.push(`  ${index + 1}. ${task.taskText}`);
+      });
+    }
+
+    return lines.join("\n");
+  }
+
   return {
     getStatus: async () => {
       await ensureBootstrapped();
@@ -1336,12 +1404,28 @@ function createSystemService({
     forcePoll: async ({ dutyCode, chatId } = {}) => {
       await ensureBootstrapped();
 
-      if (!chatId) {
-        return "❌ chatId topilmadi.";
+      const targetChatId = await resolveTargetChatId(chatId);
+
+      if (!targetChatId) {
+        return "❌ Guruh chat topilmadi. Avval botni guruhda /start bilan bog'lang.";
       }
 
-      await dutyPollService.createPoll({ dutyCode, chatId });
+      await dutyPollService.createPoll({ dutyCode, chatId: targetChatId });
       return `✅ Poll yaratildi: ${dutyCode}`;
+    },
+    notify: async ({ dutyCode, chatId } = {}) => {
+      await ensureBootstrapped();
+
+      const targetChatId = await resolveTargetChatId(chatId);
+
+      if (!targetChatId) {
+        return "❌ Guruh chat topilmadi. Avval botni guruhda /start bilan bog'lang.";
+      }
+
+      const message = await buildDutyNotificationMessage(dutyCode);
+      await notifier.sendMessage(targetChatId, message);
+
+      return `✅ Xabar guruhga yuborildi: ${dutyCode}`;
     },
     resolvePoll: async ({ dutyCode } = {}) => {
       await ensureBootstrapped();

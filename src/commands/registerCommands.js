@@ -449,6 +449,15 @@ function registerDebugCommands({ bot, services }) {
     });
   });
 
+  register(bot, /\/notify\s+(\S+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.systemService, "notify", {
+      dutyCode: match[1],
+      actorUserId: msg.from.id,
+      chatId: msg.chat.id,
+    });
+  });
+
   register(bot, /\/resolvepoll\s+(\S+)(?:\s+|$)/, async (msg, match) => {
     await ensureAdmin(msg, services);
     return invoke(services.systemService, "resolvePoll", {

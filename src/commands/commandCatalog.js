@@ -437,6 +437,15 @@ const COMMAND_CATALOG = [
     usage: "/forcepoll <dutyCode>",
   },
   {
+    key: "notify",
+    command: "/notify",
+    category: COMMAND_CATEGORY.DEBUG,
+    permission: COMMAND_PERMISSION.ADMIN,
+    description:
+      "Tanlangan duty bo'yicha joriy navbatchi va vazifalarni guruhga yuboradi.",
+    usage: "/notify <dutyCode>",
+  },
+  {
     key: "resolvepoll",
     command: "/resolvepoll",
     category: COMMAND_CATEGORY.DEBUG,
