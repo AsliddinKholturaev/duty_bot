@@ -1,0 +1,7 @@
+const ROTATION_DAYS = 2;
+const ROTATION_CHECK_INTERVAL_MS = 60_000;
+
+module.exports = {
+  ROTATION_DAYS,
+  ROTATION_CHECK_INTERVAL_MS,
+};
