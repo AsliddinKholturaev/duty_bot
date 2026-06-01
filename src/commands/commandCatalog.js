@@ -47,7 +47,8 @@ const COMMAND_CATALOG = [
     command: "/status",
     category: COMMAND_CATEGORY.GENERAL,
     permission: COMMAND_PERMISSION.ANYONE,
-    description: "Botning umumiy holati va faol navbatchiliklarni ko'rsatadi.",
+    description:
+      "Botning umumiy holati va faol navbatchiliklar tugash vaqtini ko'rsatadi.",
     usage: "/status",
   },
   {
@@ -56,7 +57,7 @@ const COMMAND_CATALOG = [
     category: COMMAND_CATEGORY.GENERAL,
     permission: COMMAND_PERMISSION.ANYONE,
     description:
-      "Hozirgi oshxona va hammom navbatchilari bilan almashtirish vaqtini ko'rsatadi.",
+      "Hozirgi oshxona va hammom navbatchilari bilan navbatchilik tugash vaqtini ko'rsatadi.",
     usage: "/onduty",
   },
 

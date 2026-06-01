@@ -2,6 +2,7 @@ require("dotenv").config();
 
 const dayjs = require("dayjs");
 const { createBot, registerShutdownHandlers, startBot } = require("./src/bot");
+const { registerPollHandlers } = require("./src/bot/registerPollHandlers");
 const { ROTATION_CHECK_INTERVAL_MS, ROTATION_DAYS } = require("./src/config");
 const { db, save } = require("./src/db");
 const { registerCommands } = require("./src/commands/registerCommands");
@@ -35,6 +36,13 @@ const services = createStartupServiceContainer({
   dutyService,
 });
 
+if (services.dutyPollService) {
+  registerPollHandlers({
+    bot,
+    dutyPollService: services.dutyPollService,
+  });
+}
+
 registerCommands({
   bot,
   services,
@@ -44,6 +52,7 @@ registerCommands({
 registerSchedulers({
   bot,
   db,
+  services,
   dutyService,
   rotationCheckIntervalMs: ROTATION_CHECK_INTERVAL_MS,
 });

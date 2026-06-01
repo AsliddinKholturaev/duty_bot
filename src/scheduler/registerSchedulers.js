@@ -1,6 +1,34 @@
 const cron = require("node-cron");
 
-function registerSchedulers({ bot, db, dutyService, rotationCheckIntervalMs }) {
+function registerSchedulers({
+  bot,
+  db,
+  services = {},
+  dutyService,
+  rotationCheckIntervalMs,
+}) {
+  if (
+    services.automationService &&
+    typeof services.automationService.runFrequentChecks === "function"
+  ) {
+    setInterval(() => {
+      services.automationService.runFrequentChecks().catch((err) => {
+        console.error(
+          "[automation] Frequent check failed:",
+          err.message || err,
+        );
+      });
+    }, rotationCheckIntervalMs);
+
+    cron.schedule("5 9 * * *", () => {
+      services.automationService.runDailyChecks().catch((err) => {
+        console.error("[automation] Daily check failed:", err.message || err);
+      });
+    });
+
+    return;
+  }
+
   const { checkRotation, isDutyChangeDay, sendCurrentDutyReminder } =
     dutyService;
 

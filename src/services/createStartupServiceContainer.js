@@ -95,7 +95,7 @@ const ROOM_SEED = [
   { code: "room4", name: "Xona 4" },
 ];
 
-function createStartupServiceContainer({ bot, db }) {
+function createStartupServiceContainer({ bot, db, save }) {
   const prisma = getPrismaClient();
   const repositories = createRepositories(prisma);
 
@@ -274,6 +274,23 @@ function createStartupServiceContainer({ bot, db }) {
     notifier,
   });
 
+  const automationService = createAutomationService({
+    ensureBootstrapped,
+    prisma,
+    db,
+    save,
+    chatSettingsRepository: repositories.chatSettingsRepository,
+    dutyDefinitionRepository: repositories.dutyDefinitionRepository,
+    dutyRuntimeStateRepository: repositories.dutyRuntimeStateRepository,
+    dutyTaskRepository: repositories.dutyTaskRepository,
+    userMonthlyDutyStatRepository: repositories.userMonthlyDutyStatRepository,
+    genericDutyService,
+    dutyPollService,
+    roomDomainService,
+    paymentDomainService,
+    notifier,
+  });
+
   const authService = {
     ensureAdmin: async ({ userId } = {}) => {
       const isAdmin = await userAdminService.isAdmin(userId);
@@ -287,7 +304,9 @@ function createStartupServiceContainer({ bot, db }) {
   return {
     authService,
     accountabilityService,
+    automationService,
     bathroomDutyService,
+    dutyPollService,
     dutyDefinitionService,
     kitchenDutyService,
     lifecycleService,
@@ -758,7 +777,7 @@ function createKitchenCommandFacade({
 
       if (!result.rotated) {
         return result.reason === "NOT_DUE"
-          ? "Hali almashtirish vaqti kelmadi."
+          ? "Hali navbatchilik tugash vaqti kelmadi."
           : "Oshxona navbati almashtirilmadi.";
       }
 
@@ -795,7 +814,7 @@ function createKitchenCommandFacade({
         .sort((a, b) => a.position - b.position);
 
       if (queue.length < 2) {
-        return "Almashtirish uchun kamida 2 ta foydalanuvchi kerak.";
+        return "Navbatchilikni almashtirish uchun kamida 2 ta foydalanuvchi kerak.";
       }
 
       const runtime = await dutyRuntimeStateRepository.findByDutyDefinitionId(
@@ -1251,7 +1270,7 @@ function createOnDutyService({
       if (kitchenResult?.assignee) {
         lines.push(`  Navbatchi: ${formatUserMention(kitchenResult.assignee)}`);
         lines.push(
-          `  Almashtirish: ${formatDateTime(kitchenResult.nextRotationAt)}`,
+          `  Navbatchilik tugash vaqti: ${formatDateTime(kitchenResult.nextRotationAt)}`,
         );
 
         if (kitchenTasks.length) {
@@ -1276,7 +1295,7 @@ function createOnDutyService({
           .join(" va ");
         lines.push(`  Juftlik: ${names}`);
         lines.push(
-          `  Almashtirish: ${formatDateTime(bathroomResult.nextRotationAt)}`,
+          `  Navbatchilik tugash vaqti: ${formatDateTime(bathroomResult.nextRotationAt)}`,
         );
 
         if (bathroomTasks.length) {
@@ -1291,6 +1310,308 @@ function createOnDutyService({
 
       return lines.join("\n");
     },
+  };
+}
+
+function createAutomationService({
+  ensureBootstrapped,
+  prisma,
+  db,
+  save,
+  chatSettingsRepository,
+  dutyDefinitionRepository,
+  dutyRuntimeStateRepository,
+  dutyTaskRepository,
+  userMonthlyDutyStatRepository,
+  genericDutyService,
+  dutyPollService,
+  roomDomainService,
+  paymentDomainService,
+  notifier,
+}) {
+  const persist =
+    typeof save === "function"
+      ? save
+      : () => {
+          if (db && typeof db.write === "function") {
+            db.write();
+          }
+        };
+
+  const getState = () => {
+    if (!db || !db.data) {
+      return {};
+    }
+
+    if (!db.data.automation || typeof db.data.automation !== "object") {
+      db.data.automation = {};
+    }
+
+    return db.data.automation;
+  };
+
+  const resolveTargetChatId = async () => {
+    const chat = await chatSettingsRepository.findFirst();
+    if (!chat?.telegramChatId) {
+      return null;
+    }
+
+    const chatId = Number(chat.telegramChatId);
+    return Number.isFinite(chatId) ? chatId : null;
+  };
+
+  const buildDutyNotificationMessage = async (dutyCode, prefixLine = null) => {
+    const dutyDefinition = await dutyDefinitionRepository.findByCode(dutyCode);
+
+    if (!dutyDefinition) {
+      throw new Error(`Duty topilmadi: ${dutyCode}`);
+    }
+
+    const snapshot = await genericDutyService.getDutySnapshot(dutyCode);
+    const tasks = await loadTasksForCode(
+      dutyDefinitionRepository,
+      dutyTaskRepository,
+      dutyCode,
+    );
+
+    const assignees = snapshot.currentAssignment?.assignees || [];
+    const lines = [];
+
+    if (prefixLine) {
+      lines.push(prefixLine);
+    }
+
+    lines.push(`📣 ${dutyDefinition.name || dutyDefinition.code}`);
+
+    if (!assignees.length) {
+      lines.push("Hozircha navbatchi yo'q.");
+    } else if (assignees.length === 1) {
+      lines.push(`Navbatchi: ${formatUserMention(assignees[0])}`);
+    } else {
+      lines.push(
+        `Joriy juftlik: ${assignees.map((user) => formatUserMention(user)).join(" va ")}`,
+      );
+    }
+
+    if (snapshot.nextRotationAt) {
+      lines.push(
+        `Navbatchilik tugash vaqti: ${formatDateTime(snapshot.nextRotationAt)}`,
+      );
+    }
+
+    if (tasks.length) {
+      lines.push("");
+      lines.push("Vazifalar:");
+      tasks.forEach((task, index) => {
+        lines.push(`  ${index + 1}. ${task.taskText}`);
+      });
+    }
+
+    return lines.join("\n");
+  };
+
+  const createLeadTimePolls = async ({ chatId, now }) => {
+    const duties = await dutyDefinitionRepository.findActive();
+
+    for (const duty of duties) {
+      if (duty.category !== "ROTATION" || !duty.requiresPoll) {
+        continue;
+      }
+
+      let runtime = await dutyRuntimeStateRepository.findByDutyDefinitionId(
+        duty.id,
+      );
+
+      if (!runtime) {
+        await genericDutyService.getDutySnapshot(duty.code).catch(() => null);
+        runtime = await dutyRuntimeStateRepository.findByDutyDefinitionId(
+          duty.id,
+        );
+      }
+
+      if (!runtime || runtime.status === "WAITING_VOTE") {
+        continue;
+      }
+
+      const nextRotationAt = new Date(runtime.nextRotationAt);
+      if (!Number.isFinite(nextRotationAt.getTime())) {
+        continue;
+      }
+
+      const leadHours = Math.max(Number(duty.pollLeadHours || 2), 1);
+      const pollStartAt = new Date(
+        nextRotationAt.getTime() - leadHours * 60 * 60 * 1000,
+      );
+
+      if (now < pollStartAt || now >= nextRotationAt) {
+        continue;
+      }
+
+      const openPoll = await prisma.dutyPoll.findFirst({
+        where: {
+          dutyDefinitionId: duty.id,
+          decisionApplied: false,
+          resolvedAt: null,
+        },
+      });
+
+      if (openPoll) {
+        continue;
+      }
+
+      await dutyPollService.createPoll({ dutyCode: duty.code, chatId });
+    }
+  };
+
+  const resolveDuePollsAndNotify = async ({ chatId, now }) => {
+    const results = await dutyPollService.resolveDuePolls({ at: now });
+
+    if (!results.length) {
+      return;
+    }
+
+    const allDuties = await dutyDefinitionRepository.findAll();
+    const dutyById = new Map(allDuties.map((item) => [item.id, item]));
+
+    for (const result of results) {
+      const duty = dutyById.get(result.poll?.dutyDefinitionId);
+      if (!duty) {
+        continue;
+      }
+
+      const outcome = result.decision?.result || result.outcome || "UNKNOWN";
+      const prefix =
+        outcome === "APPROVED"
+          ? `✅ Poll yakunlandi (${duty.code}): TASDIQLANDI`
+          : `⚠️ Poll yakunlandi (${duty.code}): ${outcome}`;
+
+      const message = await buildDutyNotificationMessage(duty.code, prefix);
+      await notifier.sendMessage(chatId, message);
+    }
+  };
+
+  const rotateNoPollDuties = async ({ chatId, now }) => {
+    const duties = await dutyDefinitionRepository.findActive();
+
+    for (const duty of duties) {
+      if (duty.category !== "ROTATION" || duty.requiresPoll) {
+        continue;
+      }
+
+      const result = await genericDutyService.rotateDutyIfDue({
+        dutyCode: duty.code,
+        at: now,
+      });
+
+      if (!result?.rotated) {
+        continue;
+      }
+
+      const message = await buildDutyNotificationMessage(
+        duty.code,
+        `✅ Navbatchilik yangilandi (${duty.code})`,
+      );
+      await notifier.sendMessage(chatId, message);
+    }
+  };
+
+  const runFrequentChecks = async () => {
+    await ensureBootstrapped();
+
+    const chatId = await resolveTargetChatId();
+    if (!chatId) {
+      return;
+    }
+
+    const now = new Date();
+    await createLeadTimePolls({ chatId, now });
+    await resolveDuePollsAndNotify({ chatId, now });
+    await rotateNoPollDuties({ chatId, now });
+  };
+
+  const runDailyChecks = async () => {
+    await ensureBootstrapped();
+
+    const chatId = await resolveTargetChatId();
+    if (!chatId) {
+      return;
+    }
+
+    const now = new Date();
+    const day = now.getDate();
+    const dateKey = now.toISOString().slice(0, 10);
+    const monthKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+    const state = getState();
+
+    const weekDay = now.getDay();
+    if (
+      (weekDay === 0 || weekDay === 6) &&
+      state.lastRoomReminderDate !== dateKey
+    ) {
+      await roomDomainService.sendWeeklyReminders({ chatId, date: now });
+      state.lastRoomReminderDate = dateKey;
+      persist();
+    }
+
+    const paymentSettings = await prisma.paymentSettings.findUnique({
+      where: { singletonKey: "default" },
+    });
+    const reminderDay = Number(paymentSettings?.reminderDayOfMonth || 13);
+    const collectionDay = Number(paymentSettings?.collectionDayOfMonth || 15);
+
+    if (day === reminderDay && state.lastPaymentReminderMonth !== monthKey) {
+      await paymentDomainService.sendDay13Reminder({
+        chatId,
+        adminChatId: chatId,
+        monthKey,
+      });
+      state.lastPaymentReminderMonth = monthKey;
+      persist();
+    }
+
+    if (
+      day === collectionDay &&
+      state.lastPaymentCollectionMonth !== monthKey
+    ) {
+      await paymentDomainService.sendDay15Collection({ chatId, monthKey });
+      state.lastPaymentCollectionMonth = monthKey;
+      persist();
+    }
+
+    if (day === 1) {
+      const previousMonthDate = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1),
+      );
+      const previousMonthKey = `${previousMonthDate.getUTCFullYear()}-${String(previousMonthDate.getUTCMonth() + 1).padStart(2, "0")}`;
+
+      if (state.lastBadDutyNotifyMonth === previousMonthKey) {
+        return;
+      }
+
+      const offenders = await userMonthlyDutyStatRepository.findOffenders(
+        previousMonthKey,
+        2,
+      );
+
+      const text = offenders.length
+        ? [
+            `⚠️ ${previousMonthKey} badDuty avtomatik hisoboti:`,
+            ...offenders.map(
+              (item, index) =>
+                `${index + 1}. ${formatUserMention(item.user)} o'tgan oy ${item.badDutyCount} marta vazifani vaqtida topshirmagan.`,
+            ),
+          ].join("\n")
+        : `✅ ${previousMonthKey} uchun badDuty >= 2 bo'lgan foydalanuvchilar yo'q.`;
+
+      await notifier.sendMessage(chatId, text);
+      state.lastBadDutyNotifyMonth = previousMonthKey;
+      persist();
+    }
+  };
+
+  return {
+    runFrequentChecks,
+    runDailyChecks,
   };
 }
 
@@ -1356,7 +1677,9 @@ function createSystemService({
     }
 
     if (snapshot.nextRotationAt) {
-      lines.push(`Almashtirish: ${formatDateTime(snapshot.nextRotationAt)}`);
+      lines.push(
+        `Navbatchilik tugash vaqti: ${formatDateTime(snapshot.nextRotationAt)}`,
+      );
     }
 
     if (tasks.length) {
