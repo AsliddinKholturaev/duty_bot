@@ -1,225 +1,589 @@
-function registerCommands({ bot, db, save, dutyService, dayjs }) {
-  const {
-    addUserToDuty,
-    ensureAdmin,
-    isAdmin,
-    removeUserFromDuty,
-    sendDutyMessage,
-  } = dutyService;
+const { COMMAND_CATALOG, COMMAND_PERMISSION } = require("./commandCatalog");
 
-  bot.onText(/\/start/, (msg) => {
-    const chatId = msg.chat.id;
+function registerCommands({
+  bot,
+  services = {},
+  dutyService,
+  logger = console,
+}) {
+  if (!bot) {
+    throw new Error("registerCommands requires bot");
+  }
 
-    if (!db.data.chatId) {
-      db.data.chatId = chatId;
+  const serviceRegistry = { ...services };
 
-      if (!isAdmin(msg.from.id)) {
-        db.data.admins.push(msg.from.id);
-      }
+  if (dutyService && !serviceRegistry.dutyService) {
+    serviceRegistry.dutyService = dutyService;
+  }
 
-      save();
+  const context = { bot, services: serviceRegistry, logger };
 
-      bot.sendMessage(chatId, "✅ Bot ishga tushdi. Siz admin bo'ldingiz.");
-    } else {
-      bot.sendMessage(chatId, "Bot allaqachon ishga tushirilgan.");
-    }
+  registerTelegramCommands(bot, logger);
+
+  registerGeneralCommands(context);
+  registerUserAdminCommands(context);
+  registerDutyDefinitionCommands(context);
+  registerKitchenCommands(context);
+  registerBathroomCommands(context);
+  registerRoomCommands(context);
+  registerPaymentCommands(context);
+  registerDebugCommands(context);
+  registerAccountabilityCommands(context);
+}
+
+function registerGeneralCommands({ bot, services }) {
+  register(bot, /\/start(?:\s+|$)/, async (msg) => {
+    await invoke(services.lifecycleService, "start", {
+      chatId: msg.chat.id,
+      user: msg.from,
+    });
+
+    return "Bot ishga tushdi.";
   });
 
-  bot.onText(/\/add(?:\s+(.+))?/, (msg) => {
-    if (!ensureAdmin(msg)) {
-      return;
-    }
-
-    let user = msg.reply_to_message?.from;
-
-    if (!user && Array.isArray(msg.entities)) {
-      const mentionEntity = msg.entities.find((e) => e.type === "text_mention");
-      user = mentionEntity?.user;
-    }
-
-    if (!user) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "❌ Foydalanuvchini aniqlab bo'lmadi. Quyidagilardan birini ishlating:\n1. Foydalanuvchi xabariga reply qilib /add yozing\n2. Foydalanuvchi /join yuborsin\n3. Admin /addid <telegram_user_id> ishlatsin",
-      );
-    }
-
-    const result = addUserToDuty(user);
-
-    if (result.added) {
-      bot.sendMessage(
-        msg.chat.id,
-        `✅ @${result.username} navbatchilar ro'yxatiga qo'shildi.`,
-      );
-    } else {
-      bot.sendMessage(
-        msg.chat.id,
-        "ℹ️ Bu foydalanuvchi allaqachon ro'yxatda bor.",
-      );
-    }
+  register(bot, /\/(commands|help)(?:\s+|$)/, async () => {
+    return formatCommandHelp(COMMAND_CATALOG);
   });
 
-  bot.onText(/\/join/, (msg) => {
-    const result = addUserToDuty(msg.from);
+  register(bot, /\/status(?:\s+|$)/, async () => {
+    return invoke(services.systemService, "getStatus", {});
+  });
+}
 
-    if (result.added) {
-      bot.sendMessage(
-        msg.chat.id,
-        `✅ Siz navbatchilar ro'yxatiga qo'shildingiz: @${result.username}`,
-      );
-    } else {
-      bot.sendMessage(
-        msg.chat.id,
-        "ℹ️ Siz allaqachon navbatchilar ro'yxatidasiz.",
+function registerTelegramCommands(bot, logger) {
+  const telegramCommands = COMMAND_CATALOG.map((item) => ({
+    command: item.command.replace("/", ""),
+    description: normalizeDescription(item.description),
+  })).filter((item) => {
+    const ok = /^[a-z0-9_]{1,32}$/.test(item.command);
+
+    if (!ok) {
+      logger.warn(
+        `Skipping setMyCommands entry for unsupported Telegram command: ${item.command}`,
       );
     }
+
+    return ok;
   });
 
-  bot.onText(/\/addid\s+(\d+)/, async (msg, match) => {
-    if (!ensureAdmin(msg)) {
-      return;
-    }
+  bot.setMyCommands(telegramCommands).catch((error) => {
+    logger.error("Failed to register Telegram command catalog", error);
+  });
+}
 
-    const userId = Number(match[1]);
+function registerUserAdminCommands({ bot, services }) {
+  register(bot, /\/adduser(?:\s+|$)/, async (msg) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.userAdminService, "addUser", {
+      actorUserId: msg.from.id,
+      message: msg,
+    });
+  });
 
+  register(bot, /\/removeuser\s+(\d+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.userAdminService, "removeUser", {
+      actorUserId: msg.from.id,
+      telegramUserId: Number(match[1]),
+    });
+  });
+
+  register(bot, /\/admins(?:\s+|$)/, async (msg) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.userAdminService, "listAdmins", {});
+  });
+
+  register(bot, /\/addadmin\s+(\d+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.userAdminService, "addAdmin", {
+      actorUserId: msg.from.id,
+      telegramUserId: Number(match[1]),
+    });
+  });
+
+  register(bot, /\/removeadmin\s+(\d+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.userAdminService, "removeAdmin", {
+      actorUserId: msg.from.id,
+      telegramUserId: Number(match[1]),
+    });
+  });
+
+  register(bot, /\/users(?:\s+|$)/, async (msg) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.userAdminService, "listUsers", {});
+  });
+}
+
+function registerDutyDefinitionCommands({ bot, services }) {
+  register(bot, /\/duties(?:\s+|$)/, async (msg) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.dutyDefinitionService, "listDuties", {});
+  });
+
+  register(bot, /\/dutyshow\s+(\S+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.dutyDefinitionService, "getDuty", {
+      code: match[1],
+    });
+  });
+
+  register(bot, /\/dutycreate\s+(.+)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.dutyDefinitionService, "createDuty", {
+      rawInput: match[1],
+      actorUserId: msg.from.id,
+    });
+  });
+
+  register(bot, /\/dutyenable\s+(\S+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.dutyDefinitionService, "enableDuty", {
+      code: match[1],
+    });
+  });
+
+  register(bot, /\/dutydisable\s+(\S+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.dutyDefinitionService, "disableDuty", {
+      code: match[1],
+    });
+  });
+
+  register(
+    bot,
+    /\/dutysetinterval\s+(\S+)\s+(\S+)(?:\s+|$)/,
+    async (msg, match) => {
+      await ensureAdmin(msg, services);
+      return invoke(services.dutyDefinitionService, "setInterval", {
+        code: match[1],
+        intervalInput: match[2],
+      });
+    },
+  );
+
+  register(
+    bot,
+    /\/dutysetpoll\s+(\S+)\s+(\d+)\s+(\d+)(?:\s+|$)/,
+    async (msg, match) => {
+      await ensureAdmin(msg, services);
+      return invoke(services.dutyDefinitionService, "setPollConfig", {
+        code: match[1],
+        leadHours: Number(match[2]),
+        durationMinutes: Number(match[3]),
+      });
+    },
+  );
+
+  register(bot, /\/dutysetcron\s+(\S+)\s+(.+)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.dutyDefinitionService, "setCron", {
+      code: match[1],
+      cron: match[2],
+    });
+  });
+
+  register(
+    bot,
+    /\/add-task\s+"([^"]+)"\s+(\S+)(?:\s+|$)/,
+    async (msg, match) => {
+      await ensureAdmin(msg, services);
+      return invoke(services.dutyDefinitionService, "addTask", {
+        taskText: match[1],
+        dutyTypeEnum: match[2],
+        actorUserId: msg.from.id,
+      });
+    },
+  );
+
+  register(
+    bot,
+    /\/remove-task\s+(\d+)\s+(\S+)(?:\s+|$)/,
+    async (msg, match) => {
+      await ensureAdmin(msg, services);
+      return invoke(services.dutyDefinitionService, "removeTask", {
+        taskId: Number(match[1]),
+        dutyTypeEnum: match[2],
+      });
+    },
+  );
+
+  register(bot, /\/tasks\s+(\S+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.dutyDefinitionService, "listTasks", {
+      dutyTypeEnum: match[1],
+    });
+  });
+
+  register(bot, /\/clear-tasks\s+(\S+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.dutyDefinitionService, "clearTasks", {
+      dutyTypeEnum: match[1],
+    });
+  });
+}
+
+function registerKitchenCommands({ bot, services }) {
+  register(bot, /\/kitchen(?:\s+|$)/, async () => {
+    return invoke(services.kitchenDutyService, "getCurrentAssignee", {});
+  });
+
+  register(bot, /\/kitchenlist(?:\s+|$)/, async () => {
+    return invoke(services.kitchenDutyService, "getKitchenQueue", {});
+  });
+
+  register(bot, /\/kitchenadd\s+(\d+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.kitchenDutyService, "addQueueMember", {
+      userId: Number(match[1]),
+    });
+  });
+
+  register(bot, /\/kitchenremove\s+(\d+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.kitchenDutyService, "removeQueueMember", {
+      userId: Number(match[1]),
+    });
+  });
+
+  register(bot, /\/kitchenskip(?:\s+|$)/, async (msg) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.kitchenDutyService, "rotateIfDue", {
+      force: true,
+      source: "COMMAND",
+    });
+  });
+
+  register(bot, /\/kitchenswap(?:\s+|$)/, async (msg) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.kitchenDutyService, "swapCurrentWithNext", {
+      actorUserId: msg.from.id,
+    });
+  });
+}
+
+function registerBathroomCommands({ bot, services }) {
+  register(bot, /\/bathroom(?:\s+|$)/, async () => {
+    return invoke(services.bathroomDutyService, "getCurrentPair", {});
+  });
+
+  register(bot, /\/bathroomlist(?:\s+|$)/, async () => {
+    return invoke(services.bathroomDutyService, "listPairs", {});
+  });
+
+  register(bot, /\/bathroomadd\s+(\d+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.bathroomDutyService, "addPoolUser", {
+      userId: Number(match[1]),
+    });
+  });
+
+  register(bot, /\/bathroomremove\s+(\d+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.bathroomDutyService, "removePoolUser", {
+      userId: Number(match[1]),
+    });
+  });
+
+  register(
+    bot,
+    /\/bathroompair\s+(\d+)\s+(\d+)(?:\s+|$)/,
+    async (msg, match) => {
+      await ensureAdmin(msg, services);
+      return invoke(services.bathroomDutyService, "upsertPair", {
+        userId1: Number(match[1]),
+        userId2: Number(match[2]),
+      });
+    },
+  );
+
+  register(bot, /\/bathroomskip(?:\s+|$)/, async (msg) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.bathroomDutyService, "rotatePairIfDue", {
+      force: true,
+      source: "COMMAND",
+    });
+  });
+}
+
+function registerRoomCommands({ bot, services }) {
+  register(bot, /\/rooms(?:\s+|$)/, async () => {
+    return invoke(services.roomService, "listOwners", {});
+  });
+
+  register(bot, /\/roomshow\s+(\S+)(?:\s+|$)/, async (_msg, match) => {
+    return invoke(services.roomService, "listOwners", {
+      roomCode: match[1],
+    });
+  });
+
+  register(bot, /\/roomcreate\s+(\S+)\s+(.+)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.roomService, "createRoom", {
+      code: match[1],
+      name: match[2],
+    });
+  });
+
+  register(bot, /\/roomdelete\s+(\S+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.roomService, "deleteRoom", {
+      roomCode: match[1],
+    });
+  });
+
+  register(bot, /\/put\s+(\d+)\s+(\S+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.roomService, "moveUser", {
+      userId: Number(match[1]),
+      roomCode: match[2],
+    });
+  });
+
+  register(bot, /\/roomremove\s+(\d+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.roomService, "removeUser", {
+      userId: Number(match[1]),
+    });
+  });
+}
+
+function registerPaymentCommands({ bot, services }) {
+  register(bot, /\/payment(?:\s+|$)/, async (msg) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.paymentService, "getSettings", {});
+  });
+
+  register(
+    bot,
+    /\/payment-per\s+(\d+(?:\.\d+)?)(?:\s+(\S+))?(?:\s+|$)/,
+    async (msg, match) => {
+      await ensureAdmin(msg, services);
+      return invoke(services.paymentService, "setMonthAmount", {
+        amount: Number(match[1]),
+        currency: match[2],
+        source: "COMMAND",
+        setByUserId: msg.from.id,
+      });
+    },
+  );
+
+  register(bot, /\/payment-amount(?:\s+|$)/, async (msg) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.paymentService, "getCurrentAmount", {});
+  });
+
+  register(
+    bot,
+    /\/payment-history(?:\s+(\d+))?(?:\s+|$)/,
+    async (msg, match) => {
+      await ensureAdmin(msg, services);
+      return invoke(services.paymentService, "getAmountHistory", {
+        months: match[1] ? Number(match[1]) : undefined,
+      });
+    },
+  );
+
+  register(
+    bot,
+    /\/paymentcard\s+(\S+)(?:\s+(.+))?(?:\s+|$)/,
+    async (msg, match) => {
+      await ensureAdmin(msg, services);
+      return invoke(services.paymentService, "setCardDetails", {
+        cardNumber: match[1],
+        holderName: match[2] || null,
+      });
+    },
+  );
+
+  register(bot, /\/paymentcash\s+(.+)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.paymentService, "setCashInstruction", {
+      instruction: match[1],
+    });
+  });
+
+  register(
+    bot,
+    /\/paymentmode\s+(CARD|CASH|CARD_OR_CASH)(?:\s+|$)/,
+    async (msg, match) => {
+      await ensureAdmin(msg, services);
+      return invoke(services.paymentService, "setPaymentMode", {
+        mode: match[1],
+      });
+    },
+  );
+
+  register(
+    bot,
+    /\/paymentday\s+(\d{1,2})\s+(\d{1,2})(?:\s+|$)/,
+    async (msg, match) => {
+      await ensureAdmin(msg, services);
+      return invoke(services.paymentService, "setPaymentDays", {
+        reminderDay: Number(match[1]),
+        collectionDay: Number(match[2]),
+      });
+    },
+  );
+}
+
+function registerDebugCommands({ bot, services }) {
+  register(bot, /\/forcerotate\s+(\S+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.systemService, "forceRotate", {
+      dutyCode: match[1],
+      actorUserId: msg.from.id,
+    });
+  });
+
+  register(bot, /\/forcepoll\s+(\S+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.systemService, "forcePoll", {
+      dutyCode: match[1],
+      actorUserId: msg.from.id,
+      chatId: msg.chat.id,
+    });
+  });
+
+  register(bot, /\/resolvepoll\s+(\S+)(?:\s+|$)/, async (msg, match) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.systemService, "resolvePoll", {
+      dutyCode: match[1],
+      actorUserId: msg.from.id,
+    });
+  });
+
+  register(bot, /\/reload(?:\s+|$)/, async (msg) => {
+    await ensureAdmin(msg, services);
+    return invoke(services.systemService, "reload", {
+      actorUserId: msg.from.id,
+    });
+  });
+}
+
+function registerAccountabilityCommands({ bot, services }) {
+  register(
+    bot,
+    /\/badDuties(?:\s+(\d{4}-\d{2}))?(?:\s+|$)/,
+    async (msg, match) => {
+      await ensureAdmin(msg, services);
+      return invoke(services.accountabilityService, "getBadDuties", {
+        monthKey: match[1] || null,
+      });
+    },
+  );
+}
+
+function register(bot, regexp, fn) {
+  bot.onText(regexp, async (msg, match) => {
     try {
-      const member = await bot.getChatMember(msg.chat.id, userId);
-      const user = member?.user;
-
-      if (!user) {
-        return bot.sendMessage(
-          msg.chat.id,
-          "Bu foydalanuvchi ushbu guruhda topilmadi.",
-        );
-      }
-
-      const result = addUserToDuty(user);
-
-      if (result.added) {
-        bot.sendMessage(
-          msg.chat.id,
-          `✅ @${result.username} navbatchilar ro'yxatiga qo'shildi.`,
-        );
-      } else {
-        bot.sendMessage(
-          msg.chat.id,
-          "ℹ️ Bu foydalanuvchi allaqachon ro'yxatda bor.",
-        );
-      }
+      const result = await fn(msg, match || []);
+      await sendResult(bot, msg.chat.id, result);
     } catch (error) {
-      bot.sendMessage(
+      await bot.sendMessage(
         msg.chat.id,
-        "ID orqali qo'shib bo'lmadi. Foydalanuvchi guruhda borligini tekshiring.",
+        `Xatolik: ${error.message || String(error)}`,
       );
     }
   });
+}
 
-  bot.onText(/\/remove(?:\s+(\d+))?/, (msg, match) => {
-    if (!ensureAdmin(msg)) {
-      return;
+async function ensureAdmin(msg, services) {
+  if (!msg || !msg.from) {
+    throw new Error("Missing message sender");
+  }
+
+  if (
+    services.authService &&
+    typeof services.authService.ensureAdmin === "function"
+  ) {
+    await services.authService.ensureAdmin({
+      userId: msg.from.id,
+      chatId: msg.chat.id,
+    });
+    return;
+  }
+
+  if (
+    services.userAdminService &&
+    typeof services.userAdminService.isAdmin === "function"
+  ) {
+    const isAdmin = await services.userAdminService.isAdmin(msg.from.id);
+
+    if (!isAdmin) {
+      throw new Error("Admin permission required");
     }
 
-    let user = msg.reply_to_message?.from;
+    return;
+  }
 
-    if (!user && Array.isArray(msg.entities)) {
-      const mentionEntity = msg.entities.find(
-        (entity) => entity.type === "text_mention",
-      );
-      user = mentionEntity?.user;
+  if (
+    services.dutyService &&
+    typeof services.dutyService.ensureAdmin === "function"
+  ) {
+    const ok = await services.dutyService.ensureAdmin(msg);
+
+    if (!ok) {
+      throw new Error("Admin permission required");
     }
 
-    const userId = user?.id || (match?.[1] ? Number(match[1]) : null);
+    return;
+  }
 
-    if (!userId) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "❌ O'chiriladigan foydalanuvchini aniqlab bo'lmadi. Quyidagilardan birini ishlating:\n1. Foydalanuvchi xabariga reply qilib /remove yozing\n2. Admin /remove <telegram_user_id> ishlatsin",
-      );
-    }
+  throw new Error("Admin guard service is not configured");
+}
 
-    const result = removeUserFromDuty(userId);
+async function invoke(service, methodName, payload) {
+  if (!service || typeof service[methodName] !== "function") {
+    throw new Error(`Service method not available: ${methodName}`);
+  }
 
-    if (!result.removed) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "ℹ️ Bu foydalanuvchi navbatchilar ro'yxatida topilmadi.",
-      );
-    }
+  return service[methodName](payload || {});
+}
 
-    bot.sendMessage(
-      msg.chat.id,
-      `🗑 @${result.username} navbatchilar ro'yxatidan o'chirildi.`,
-    );
-  });
+function formatCommandHelp(items) {
+  return items
+    .map(
+      (item) =>
+        `${item.command} - ${item.description}${item.permission ? ` [${translatePermission(item.permission)}]` : ""}`,
+    )
+    .join("\n");
+}
 
-  bot.onText(/\/list/, (msg) => {
-    if (!ensureAdmin(msg)) {
-      return;
-    }
+function normalizeDescription(value) {
+  const fallback = "Tavsif yo'q";
+  const text = String(value || fallback).trim();
 
-    if (db.data.users.length === 0) {
-      return bot.sendMessage(msg.chat.id, "Hali navbatchilar ro'yxati bo'sh.");
-    }
+  if (text.length <= 256) {
+    return text;
+  }
 
-    const text = db.data.users
-      .map((u, i) => {
-        const mark = i === db.data.currentIndex ? "👉" : " ";
-        return `${mark} @${u.username} (ID: ${u.id})`;
-      })
-      .join("\n");
+  return `${text.slice(0, 253)}...`;
+}
 
-    bot.sendMessage(msg.chat.id, `📋 Navbatchilar ro'yxati:\n\n${text}`);
-  });
+function translatePermission(permission) {
+  if (permission === COMMAND_PERMISSION.ANYONE) {
+    return "Hamma uchun";
+  }
 
-  bot.onText(/\/duty/, (msg) => {
-    sendDutyMessage(msg.chat.id, "🧹 Hozirgi navbatchi:");
-  });
+  if (permission === COMMAND_PERMISSION.ADMIN) {
+    return "Faqat admin";
+  }
 
-  bot.onText(/\/skip/, (msg) => {
-    if (!ensureAdmin(msg)) {
-      return;
-    }
+  return permission;
+}
 
-    const users = db.data.users;
-    if (users.length === 0) {
-      return bot.sendMessage(msg.chat.id, "Hali navbatchilar ro'yxati bo'sh.");
-    }
+async function sendResult(bot, chatId, result) {
+  if (result == null) {
+    return;
+  }
 
-    db.data.currentIndex = (db.data.currentIndex + 1) % users.length;
-    db.data.lastUpdated = dayjs().format();
+  if (typeof result === "string") {
+    await bot.sendMessage(chatId, result);
+    return;
+  }
 
-    save();
-
-    sendDutyMessage(msg.chat.id, "⏭ Navbatchi o'tkazib yuborildi.");
-  });
-
-  bot.onText(/\/swap/, (msg) => {
-    if (!ensureAdmin(msg)) {
-      return;
-    }
-
-    const { users, currentIndex } = db.data;
-
-    if (users.length < 2) {
-      return bot.sendMessage(
-        msg.chat.id,
-        "🔁 Almashtirish uchun kamida 2 ta navbatchi kerak.",
-      );
-    }
-
-    const nextIndex = (currentIndex + 1) % users.length;
-
-    [users[currentIndex], users[nextIndex]] = [
-      users[nextIndex],
-      users[currentIndex],
-    ];
-
-    db.data.lastUpdated = dayjs().format();
-
-    save();
-
-    sendDutyMessage(msg.chat.id, "🔄 Navbatchi o'zgartirildi!");
-  });
+  await bot.sendMessage(chatId, JSON.stringify(result, null, 2));
 }
 
 module.exports = {

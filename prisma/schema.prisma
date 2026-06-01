@@ -1,0 +1,319 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum DutyTypeEnum {
+  KITCHEN_TRASH
+  BATHROOM_TOILET
+  ROOM_CLEANING
+  FLAT_PAYMENT
+}
+
+enum DutyCategory {
+  ROTATION
+  ROOM_REMINDER
+  PAYMENT_REMINDER
+}
+
+enum AssignmentMode {
+  SINGLE
+  PAIR
+  ROOM
+  NONE
+}
+
+enum DutyRuntimeStatus {
+  ACTIVE
+  WAITING_VOTE
+  PAUSED
+}
+
+enum DutyPollResult {
+  APPROVED
+  REJECTED
+  TIED
+  EXPIRED
+}
+
+enum PaymentMode {
+  CARD
+  CASH
+  CARD_OR_CASH
+}
+
+enum PaymentAmountSource {
+  ADMIN_REPLY
+  COMMAND
+  FALLBACK
+}
+
+enum CommandVisibility {
+  ALL_USERS
+  ADMINS_ONLY
+}
+
+model User {
+  id                Int                      @id @default(autoincrement())
+  telegramUserId    BigInt                   @unique
+  username          String?
+  firstName         String?
+  lastName          String?
+  isActive          Boolean                  @default(true)
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  admin             Admin?
+  dutyQueueItems    DutyAssignmentQueue[]
+  dutyGroupMembers  DutyAssignmentGroupMember[]
+  createdDutyTasks  DutyTask[]               @relation("DutyTaskCreatedBy")
+  monthlyDutyStats  UserMonthlyDutyStat[]
+  roomMemberships   RoomMember[]
+  setPaymentAmounts PaymentMonthAmount[]
+
+  @@index([isActive])
+  @@index([username])
+}
+
+model Admin {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @unique
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+}
+
+model ChatSettings {
+  id             Int      @id @default(autoincrement())
+  telegramChatId BigInt   @unique
+  title          String?
+  timezone       String   @default("UTC")
+  language       String   @default("en")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model DutyDefinition {
+  id                    Int                   @id @default(autoincrement())
+  code                  String                @unique
+  builtinType           DutyTypeEnum?         @unique
+  name                  String
+  description           String?
+  category              DutyCategory
+  isActive              Boolean               @default(true)
+  assignmentMode        AssignmentMode
+  rotationIntervalHours Int?
+  rotationIntervalDays  Int?
+  scheduleCron          String?
+  requiresPoll          Boolean               @default(false)
+  pollLeadHours         Int?
+  pollDurationMinutes   Int?
+  tieKeepsCurrent       Boolean               @default(true)
+  failureKeepsCurrent   Boolean               @default(true)
+  metadata              Json?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  queueItems            DutyAssignmentQueue[]
+  assignmentGroups      DutyAssignmentGroup[]
+  runtimeState          DutyRuntimeState?
+  tasks                 DutyTask[]
+  polls                 DutyPoll[]
+
+  @@index([isActive, category])
+}
+
+model DutyAssignmentQueue {
+  id               Int            @id @default(autoincrement())
+  dutyDefinitionId Int
+  userId           Int
+  position         Int
+  isActive         Boolean        @default(true)
+
+  dutyDefinition   DutyDefinition @relation(fields: [dutyDefinitionId], references: [id], onDelete: Cascade)
+  user             User           @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([dutyDefinitionId, userId])
+  @@unique([dutyDefinitionId, position])
+  @@index([dutyDefinitionId, isActive, position])
+  @@index([userId, isActive])
+}
+
+model DutyAssignmentGroup {
+  id               Int                         @id @default(autoincrement())
+  dutyDefinitionId Int
+  name             String
+  position         Int
+  isActive         Boolean                     @default(true)
+
+  dutyDefinition   DutyDefinition              @relation(fields: [dutyDefinitionId], references: [id], onDelete: Cascade)
+  members          DutyAssignmentGroupMember[]
+
+  @@unique([dutyDefinitionId, position])
+  @@unique([dutyDefinitionId, name])
+  @@index([dutyDefinitionId, isActive, position])
+}
+
+model DutyAssignmentGroupMember {
+  id       Int                 @id @default(autoincrement())
+  groupId  Int
+  userId   Int
+
+  group    DutyAssignmentGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user     User                @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([groupId, userId])
+  @@index([userId])
+}
+
+model DutyRuntimeState {
+  id                   Int               @id @default(autoincrement())
+  dutyDefinitionId     Int               @unique
+  currentQueuePosition Int?
+  currentGroupPosition Int?
+  currentStartedAt     DateTime
+  nextRotationAt       DateTime
+  lastReminderAt       DateTime?
+  lastPollAt           DateTime?
+  status               DutyRuntimeStatus @default(ACTIVE)
+  updatedAt            DateTime          @updatedAt
+
+  dutyDefinition       DutyDefinition    @relation(fields: [dutyDefinitionId], references: [id], onDelete: Cascade)
+  polls                DutyPoll[]
+
+  @@index([status, nextRotationAt])
+}
+
+model DutyTask {
+  id               Int            @id @default(autoincrement())
+  dutyDefinitionId Int
+  taskText         String
+  position         Int
+  isActive         Boolean        @default(true)
+  createdByUserId  Int?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  dutyDefinition   DutyDefinition @relation(fields: [dutyDefinitionId], references: [id], onDelete: Cascade)
+  createdBy        User?          @relation("DutyTaskCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([dutyDefinitionId, position])
+  @@index([dutyDefinitionId, isActive, position])
+}
+
+model UserMonthlyDutyStat {
+  id                Int      @id @default(autoincrement())
+  userId            Int
+  monthKey          String
+  badDutyCount      Int      @default(0)
+  lastIncrementedAt DateTime?
+  updatedAt         DateTime @updatedAt
+
+  user              User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, monthKey])
+  @@index([monthKey, badDutyCount])
+}
+
+model DutyPoll {
+  id                Int             @id @default(autoincrement())
+  dutyDefinitionId  Int
+  runtimeStateId    Int
+  telegramPollId    String          @unique
+  telegramMessageId BigInt?
+  question          String
+  yesVotes          Int             @default(0)
+  noVotes           Int             @default(0)
+  openedAt          DateTime
+  closesAt          DateTime
+  resolvedAt        DateTime?
+  result            DutyPollResult?
+  decisionApplied   Boolean         @default(false)
+
+  dutyDefinition    DutyDefinition  @relation(fields: [dutyDefinitionId], references: [id], onDelete: Cascade)
+  runtimeState      DutyRuntimeState @relation(fields: [runtimeStateId], references: [id], onDelete: Cascade)
+
+  @@index([runtimeStateId, closesAt])
+  @@index([dutyDefinitionId, resolvedAt])
+  @@index([decisionApplied, closesAt])
+}
+
+model Room {
+  id          Int         @id @default(autoincrement())
+  code        String      @unique
+  name        String
+  isActive    Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  members     RoomMember[]
+
+  @@index([isActive])
+}
+
+model RoomMember {
+  id        Int      @id @default(autoincrement())
+  roomId    Int
+  userId    Int
+  isOwner   Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([roomId, userId])
+  @@index([userId])
+  @@index([roomId, isOwner])
+}
+
+model PaymentSettings {
+  id                      Int         @id @default(autoincrement())
+  singletonKey            String      @unique @default("default")
+  isActive                Boolean     @default(true)
+  reminderDayOfMonth      Int         @default(13)
+  collectionDayOfMonth    Int         @default(15)
+  paymentMode             PaymentMode @default(CARD_OR_CASH)
+  cardHolderName          String?
+  cardNumberMasked        String?
+  cashInstruction         String?
+  note                    String?
+  defaultPerPersonAmount  Decimal?
+  amountCurrency          String      @default("USD")
+  lastConfirmedAmountMonth String?
+  updatedAt               DateTime    @updatedAt
+
+  @@index([isActive])
+}
+
+model PaymentMonthAmount {
+  id              Int                 @id @default(autoincrement())
+  monthKey        String              @unique
+  perPersonAmount Decimal
+  currency        String
+  source          PaymentAmountSource
+  setByUserId     Int?
+  setAt           DateTime            @default(now())
+  note            String?
+
+  setByUser       User?               @relation(fields: [setByUserId], references: [id], onDelete: SetNull)
+
+  @@index([setAt])
+  @@index([source])
+}
+
+model CommandCatalog {
+  id          Int               @id @default(autoincrement())
+  command     String            @unique
+  description String
+  category    String
+  visibility  CommandVisibility @default(ALL_USERS)
+  isActive    Boolean           @default(true)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([category, isActive])
+}

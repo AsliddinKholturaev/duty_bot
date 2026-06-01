@@ -1,6 +1,8 @@
 {
   "chatId": -1002396702194,
-  "admins": [866652128],
+  "admins": [
+    866652128
+  ],
   "users": [
     {
       "id": 6426821959,
@@ -39,6 +41,6 @@
       "username": "djurakulov_820"
     }
   ],
-  "currentIndex": 6,
-  "lastUpdated": "2026-04-14T10:39:29+05:00"
+  "currentIndex": 7,
+  "lastUpdated": "2026-06-01T11:39:41+05:00"
 }

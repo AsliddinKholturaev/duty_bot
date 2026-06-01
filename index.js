@@ -6,6 +6,9 @@ const { ROTATION_CHECK_INTERVAL_MS, ROTATION_DAYS } = require("./src/config");
 const { db, save } = require("./src/db");
 const { registerCommands } = require("./src/commands/registerCommands");
 const { registerSchedulers } = require("./src/scheduler/registerSchedulers");
+const {
+  createStartupServiceContainer,
+} = require("./src/services/createStartupServiceContainer");
 const { createDutyService } = require("./src/services/dutyService");
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -25,12 +28,17 @@ const dutyService = createDutyService({
   rotationDays: ROTATION_DAYS,
 });
 
-registerCommands({
+const services = createStartupServiceContainer({
   bot,
   db,
   save,
   dutyService,
-  dayjs,
+});
+
+registerCommands({
+  bot,
+  services,
+  dutyService,
 });
 
 registerSchedulers({
