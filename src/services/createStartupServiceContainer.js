@@ -366,14 +366,37 @@ function createUserAdminService({
   return {
     addUser: async ({ message } = {}) => {
       await ensureBootstrapped();
-      const user = resolveTargetUser(message);
 
-      if (!user) {
-        return "❌ Foydalanuvchi topilmadi. Reply orqali /adduser yuboring.";
+      // Must be a reply to another user's message — we intentionally do NOT
+      // fall back to message.from so admins can't accidentally add themselves.
+      const targetFrom = message?.reply_to_message?.from;
+
+      if (!targetFrom) {
+        return "ℹ️ Foydalanuvchi qo'shish uchun biror xabarga reply qiling va /adduser yuboring.";
       }
 
-      const savedUser = await ensureUserRecord(userRepository, user);
-      return `✅ @${formatUserLabel(savedUser)} bazaga qo'shildi.`;
+      if (targetFrom.is_bot) {
+        return "❌ Botni foydalanuvchi sifatida qo'shib bo'lmaydi.";
+      }
+
+      const telegramUserId = targetFrom.id;
+      const existing = await userRepository.findByTelegramUserId(telegramUserId);
+
+      if (existing && existing.isActive) {
+        return `ℹ️ @${formatUserLabel(existing)} allaqachon foydalanuvchilar ro'yxatida bor.`;
+      }
+
+      // Create new or reactivate soft-deleted user
+      const savedUser = await ensureUserRecord(userRepository, {
+        ...targetFrom,
+        isActive: true,
+      });
+
+      if (existing && !existing.isActive) {
+        return `✅ @${formatUserLabel(savedUser)} ro'yxatga qaytarildi.`;
+      }
+
+      return `✅ @${formatUserLabel(savedUser)} foydalanuvchilar ro'yxatiga qo'shildi.`;
     },
     removeUser: async ({ telegramUserId } = {}) => {
       await ensureBootstrapped();
@@ -1011,7 +1034,21 @@ function createPaymentCommandFacade({
     },
     setMonthAmount: async (payload = {}) => {
       await ensureBootstrapped();
-      const record = await paymentDomainService.setMonthAmount(payload);
+
+      // payload.setByUserId comes in as a Telegram user ID (from msg.from.id).
+      // Resolve it to the internal DB row id to satisfy the FK constraint,
+      // falling back to null if the user is not yet in the database.
+      let resolvedSetByUserId = null;
+
+      if (payload.setByUserId != null) {
+        const user = await userRepository.findByTelegramUserId(payload.setByUserId);
+        resolvedSetByUserId = user ? user.id : null;
+      }
+
+      const record = await paymentDomainService.setMonthAmount({
+        ...payload,
+        setByUserId: resolvedSetByUserId,
+      });
       return `✅ Oy summasi saqlandi: ${record.perPersonAmount} ${record.currency} (${record.monthKey})`;
     },
     getCurrentAmount: async () => {
