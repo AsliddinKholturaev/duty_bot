@@ -213,6 +213,14 @@ function createStartupServiceContainer({ bot, db }) {
     dutyTaskRepository: repositories.dutyTaskRepository,
   });
 
+  const onDutyService = createOnDutyService({
+    ensureBootstrapped,
+    kitchenDomainService,
+    bathroomDomainService,
+    dutyDefinitionRepository: repositories.dutyDefinitionRepository,
+    dutyTaskRepository: repositories.dutyTaskRepository,
+  });
+
   const kitchenDutyService = createKitchenCommandFacade({
     ensureBootstrapped,
     kitchenDomainService,
@@ -220,6 +228,7 @@ function createStartupServiceContainer({ bot, db }) {
     dutyAssignmentQueueRepository: repositories.dutyAssignmentQueueRepository,
     dutyRuntimeStateRepository: repositories.dutyRuntimeStateRepository,
     userRepository: repositories.userRepository,
+    dutyTaskRepository: repositories.dutyTaskRepository,
   });
 
   const bathroomDutyService = createBathroomCommandFacade({
@@ -230,6 +239,7 @@ function createStartupServiceContainer({ bot, db }) {
     dutyAssignmentGroupMemberRepository:
       repositories.dutyAssignmentGroupMemberRepository,
     userRepository: repositories.userRepository,
+    dutyTaskRepository: repositories.dutyTaskRepository,
   });
 
   const roomService = createRoomCommandFacade({
@@ -243,6 +253,7 @@ function createStartupServiceContainer({ bot, db }) {
     prisma,
     paymentDomainService,
     paymentSettingsRepository: repositories.paymentSettingsRepository,
+    userRepository: repositories.userRepository,
   });
 
   const accountabilityService = createAccountabilityService({
@@ -278,6 +289,7 @@ function createStartupServiceContainer({ bot, db }) {
     dutyDefinitionService,
     kitchenDutyService,
     lifecycleService,
+    onDutyService,
     paymentService,
     roomService,
     systemService,
@@ -380,7 +392,8 @@ function createUserAdminService({
       }
 
       const telegramUserId = targetFrom.id;
-      const existing = await userRepository.findByTelegramUserId(telegramUserId);
+      const existing =
+        await userRepository.findByTelegramUserId(telegramUserId);
 
       if (existing && existing.isActive) {
         return `ℹ️ @${formatUserLabel(existing)} allaqachon foydalanuvchilar ro'yxatida bor.`;
@@ -661,6 +674,7 @@ function createKitchenCommandFacade({
   dutyAssignmentQueueRepository,
   dutyRuntimeStateRepository,
   userRepository,
+  dutyTaskRepository,
 }) {
   return {
     getCurrentAssignee: async () => {
@@ -746,7 +760,23 @@ function createKitchenCommandFacade({
           : "Oshxona navbati almashtirilmadi.";
       }
 
-      return `✅ Yangi oshxona navbatchisi: @${formatUserLabel(result.currentAssignee)}`;
+      const lines = [
+        `✅ Yangi oshxona navbatchisi: @${formatUserLabel(result.currentAssignee)}`,
+      ];
+
+      const tasks = await loadTasksForCode(
+        dutyDefinitionRepository,
+        dutyTaskRepository,
+        "KITCHEN_TRASH",
+      );
+
+      if (tasks.length) {
+        lines.push("");
+        lines.push("📌 Vazifalar:");
+        tasks.forEach((task, i) => lines.push(`  ${i + 1}. ${task.taskText}`));
+      }
+
+      return lines.join("\n");
     },
     swapCurrentWithNext: async () => {
       await ensureBootstrapped();
@@ -805,6 +835,7 @@ function createBathroomCommandFacade({
   dutyAssignmentGroupRepository,
   dutyAssignmentGroupMemberRepository,
   userRepository,
+  dutyTaskRepository,
 }) {
   return {
     getCurrentPair: async () => {
@@ -956,7 +987,21 @@ function createBathroomCommandFacade({
         .map((user) => `@${formatUserLabel(user)}`)
         .join(" va ");
 
-      return `✅ Yangi hammom juftligi: ${names || "(noma'lum)"}`;
+      const lines = [`✅ Yangi hammom juftligi: ${names || "(noma'lum)"}`];
+
+      const tasks = await loadTasksForCode(
+        dutyDefinitionRepository,
+        dutyTaskRepository,
+        "BATHROOM_TOILET",
+      );
+
+      if (tasks.length) {
+        lines.push("");
+        lines.push("📌 Vazifalar:");
+        tasks.forEach((task, i) => lines.push(`  ${i + 1}. ${task.taskText}`));
+      }
+
+      return lines.join("\n");
     },
   };
 }
@@ -1013,6 +1058,7 @@ function createPaymentCommandFacade({
   prisma,
   paymentDomainService,
   paymentSettingsRepository,
+  userRepository,
 }) {
   return {
     getSettings: async () => {
@@ -1041,7 +1087,9 @@ function createPaymentCommandFacade({
       let resolvedSetByUserId = null;
 
       if (payload.setByUserId != null) {
-        const user = await userRepository.findByTelegramUserId(payload.setByUserId);
+        const user = await userRepository.findByTelegramUserId(
+          payload.setByUserId,
+        );
         resolvedSetByUserId = user ? user.id : null;
       }
 
@@ -1161,6 +1209,85 @@ function createAccountabilityService({
             `${index + 1}. @${formatUserLabel(item.user)} bu oy ${item.badDutyCount} marta vazifani vaqtida topshirmagan.`,
         ),
       ].join("\n");
+    },
+  };
+}
+
+function createOnDutyService({
+  ensureBootstrapped,
+  kitchenDomainService,
+  bathroomDomainService,
+  dutyDefinitionRepository,
+  dutyTaskRepository,
+}) {
+  return {
+    getOnDuty: async () => {
+      await ensureBootstrapped();
+
+      const [kitchenResult, bathroomResult, kitchenTasks, bathroomTasks] =
+        await Promise.all([
+          kitchenDomainService.getCurrentAssignee().catch(() => null),
+          bathroomDomainService.getCurrentPair().catch(() => null),
+          loadTasksForCode(
+            dutyDefinitionRepository,
+            dutyTaskRepository,
+            "KITCHEN_TRASH",
+          ).catch(() => []),
+          loadTasksForCode(
+            dutyDefinitionRepository,
+            dutyTaskRepository,
+            "BATHROOM_TOILET",
+          ).catch(() => []),
+        ]);
+
+      const lines = ["📋 Hozirgi navbatchiligi:"];
+
+      // Kitchen section
+      lines.push("");
+      lines.push("🍽 Oshxona va chiqindi:");
+
+      if (kitchenResult?.assignee) {
+        lines.push(`  Navbatchi: @${formatUserLabel(kitchenResult.assignee)}`);
+        lines.push(
+          `  Almashtirish: ${formatDateTime(kitchenResult.nextRotationAt)}`,
+        );
+
+        if (kitchenTasks.length) {
+          lines.push("  Vazifalar:");
+          kitchenTasks.forEach((task, i) =>
+            lines.push(`    ${i + 1}. ${task.taskText}`),
+          );
+        }
+      } else {
+        lines.push("  Hozircha navbatchi yo'q.");
+      }
+
+      // Bathroom section
+      lines.push("");
+      lines.push("🚿 Hammom va hojatxona:");
+
+      const assignees = bathroomResult?.currentPair?.assignees || [];
+
+      if (assignees.length) {
+        const names = assignees
+          .map((user) => `@${formatUserLabel(user)}`)
+          .join(" va ");
+        lines.push(`  Juftlik: ${names}`);
+        lines.push(
+          `  Almashtirish: ${formatDateTime(bathroomResult.nextRotationAt)}`,
+        );
+
+        if (bathroomTasks.length) {
+          lines.push("  Vazifalar:");
+          bathroomTasks.forEach((task, i) =>
+            lines.push(`    ${i + 1}. ${task.taskText}`),
+          );
+        }
+      } else {
+        lines.push("  Hozircha juftlik yo'q.");
+      }
+
+      return lines.join("\n");
     },
   };
 }
@@ -1511,6 +1638,18 @@ async function normalizeBathroomGroups(
       });
     }
   }
+}
+
+async function loadTasksForCode(
+  dutyDefinitionRepository,
+  dutyTaskRepository,
+  code,
+) {
+  if (!dutyDefinitionRepository || !dutyTaskRepository) return [];
+  const duty = await dutyDefinitionRepository.findByCode(code);
+  if (!duty) return [];
+  const tasks = await dutyTaskRepository.findByDutyDefinitionId(duty.id);
+  return (tasks || []).filter((t) => t.isActive !== false);
 }
 
 function parseDutyCreateInput(rawInput) {

@@ -50,6 +50,15 @@ const COMMAND_CATALOG = [
     description: "Botning umumiy holati va faol navbatchiliklarni ko'rsatadi.",
     usage: "/status",
   },
+  {
+    key: "onduty",
+    command: "/onduty",
+    category: COMMAND_CATEGORY.GENERAL,
+    permission: COMMAND_PERMISSION.ANYONE,
+    description:
+      "Hozirgi oshxona va hammom navbatchilari bilan almashtirish vaqtini ko'rsatadi.",
+    usage: "/onduty",
+  },
 
   {
     key: "adduser",

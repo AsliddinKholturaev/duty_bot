@@ -48,6 +48,10 @@ function registerGeneralCommands({ bot, services }) {
   register(bot, /\/status(?:\s+|$)/, async () => {
     return invoke(services.systemService, "getStatus", {});
   });
+
+  register(bot, /\/onduty(?:\s+|$)/, async () => {
+    return invoke(services.onDutyService, "getOnDuty", {});
+  });
 }
 
 function registerTelegramCommands(bot, logger) {
